@@ -193,7 +193,7 @@ extra flags to control this behavior.
 ```bash
 python scripts/preprocess_questions.py \
   --input_questions_json data/CLEVR-Humans/CLEVR-Humans-train.json \
-  --input_vocab_json data/input_vocab.json \
+  --input_vocab_json data/vocab.json \
   --output_h5_file data/train_human_questions.h5 \
   --output_vocab_json data/human_vocab.json \
   --expand_vocab 1 \
