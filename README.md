@@ -12,7 +12,7 @@ This is the code for the paper
  <a href='http://larryzitnick.org/'>Larry Zitnick</a>,
  <a href='http://www.rossgirshick.info/'>Ross Girshick</a>
  <br>
- To appear at [ICCV 2017](http://iccv2017.thecvf.com/)
+ Presented at [ICCV 2017](http://iccv2017.thecvf.com/) ([Oral Presentation](https://www.youtube.com/watch?v=3pCLma2FqSk))
 
 <div align="center">
   <img src="https://github.com/facebookresearch/clevr-iep/blob/master/img/system.png" width="450px">
