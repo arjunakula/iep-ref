@@ -11,6 +11,7 @@ import torch.cuda
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torch.distributions import Categorical
 
 from iep.embedding import expand_embedding_vocab
 
@@ -150,7 +151,7 @@ class Seq2Seq(nn.Module):
     while True:
       cur_y = Variable(torch.LongTensor([y[-1]]).type_as(x.data).view(1, 1))
       logprobs, h0, c0 = self.decoder(encoded, cur_y, h0=h0, c0=c0)
-      _, next_y = logprobs.data.max(2)
+      _, next_y = logprobs.data.max(dim=2, keepdim=True)
       y.append(next_y[0, 0, 0])
       if len(y) >= max_length or y[-1] == self.END:
         break
@@ -163,23 +164,26 @@ class Seq2Seq(nn.Module):
     done = torch.ByteTensor(N).fill_(0)
     cur_input = Variable(x.data.new(N, 1).fill_(self.START))
     h, c = None, None
+    self.categoricals = []
     self.multinomial_outputs = []
     self.multinomial_probs = []
     for t in range(T):
       # logprobs is N x 1 x V
       logprobs, h, c = self.decoder(encoded, cur_input, h0=h, c0=c)
       logprobs = logprobs / temperature
-      probs = F.softmax(logprobs.view(N, -1)) # Now N x V
+      probs = F.softmax(logprobs.view(N, -1), dim=1) # Now N x V
       if argmax:
-        _, cur_output = probs.max(1)
+        _, cur_output = probs.max(dim=1, keepdim=True)
       else:
-        cur_output = probs.multinomial() # Now N x 1
+        categorical = Categorical(probs)
+        cur_output = categorical.sample()[:, None] # Now N x 1
+        self.categoricals.append(categorical)
       self.multinomial_outputs.append(cur_output)
       self.multinomial_probs.append(probs)
       cur_output_data = cur_output.data.cpu()
       not_done = logical_not(done)
       y[:, t][not_done] = cur_output_data[not_done]
-      done = logical_or(done, cur_output_data.cpu() == self.END)
+      done = logical_or(done, cur_output_data.cpu()[:, 0] == self.END)
       cur_input = cur_output
       if done.sum() == N:
         break
@@ -191,7 +195,6 @@ class Seq2Seq(nn.Module):
     giving a multiplier to the output.
     """
     assert self.multinomial_outputs is not None, 'Must call reinforce_sample first'
-    grad_output = []
 
     def gen_hook(mask):
       def hook(grad):
@@ -203,10 +206,12 @@ class Seq2Seq(nn.Module):
         mask = Variable(output_mask[:, t])
         probs.register_hook(gen_hook(mask))
 
-    for sampled_output in self.multinomial_outputs:
-      sampled_output.reinforce(reward)
-      grad_output.append(None)
-    torch.autograd.backward(self.multinomial_outputs, grad_output, retain_variables=True)
+    dtype = self.multinomial_probs[0].data.type()
+    loss = Variable(torch.zeros(1).type(dtype))
+    reward_var = Variable(reward)
+    for cat, sampled_output in zip(self.categoricals, self.multinomial_outputs):
+      loss -= (reward_var * cat.log_prob(sampled_output[:, 0])).sum()
+    loss.backward()
 
 
 def logical_and(x, y):
