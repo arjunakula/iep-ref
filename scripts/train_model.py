@@ -25,6 +25,7 @@ import iep.utils as utils
 import iep.preprocess
 from iep.data import ClevrDataset, ClevrDataLoader
 from iep.models import ModuleNet, Seq2Seq, LstmModel, CnnLstmModel, CnnLstmSaModel
+from iep.models.rn import RelationNetworkModel
 
 
 parser = argparse.ArgumentParser()
@@ -32,8 +33,10 @@ parser = argparse.ArgumentParser()
 # Input data
 parser.add_argument('--train_question_h5', default='data/train_questions.h5')
 parser.add_argument('--train_features_h5', default='data/train_features.h5')
+parser.add_argument('--train_images_h5', default='')
 parser.add_argument('--val_question_h5', default='data/val_questions.h5')
 parser.add_argument('--val_features_h5', default='data/val_features.h5')
+parser.add_argument('--val_images_h5', default='')
 parser.add_argument('--feature_dim', default='1024,14,14')
 parser.add_argument('--vocab_json', default='data/vocab.json')
 
@@ -48,7 +51,7 @@ parser.add_argument('--shuffle_train_data', default=1, type=int)
 
 # What type of model to use and which parts to train
 parser.add_argument('--model_type', default='PG',
-        choices=['PG', 'EE', 'PG+EE', 'LSTM', 'CNN+LSTM', 'CNN+LSTM+SA'])
+        choices=['PG', 'EE', 'PG+EE', 'LSTM', 'CNN+LSTM', 'CNN+LSTM+SA', 'RN'])
 parser.add_argument('--train_program_generator', default=1, type=int)
 parser.add_argument('--train_execution_engine', default=1, type=int)
 parser.add_argument('--baseline_train_only_rnn', default=0, type=int)
@@ -110,6 +113,13 @@ def main(args):
     args.checkpoint_path = '%s_%06d%s' % (name, num, ext)
 
   vocab = utils.load_vocab(args.vocab_json)
+  null_kwargs = [
+    'train_images_h5', 'val_images_h5',
+    'train_features_h5', 'val_features_h5',
+  ]
+  for kwarg in null_kwargs:
+    if getattr(args, kwarg) == '':
+      setattr(args, kwarg, None)
 
   if args.use_local_copies == 1:
     shutil.copy(args.train_question_h5, '/tmp/train_questions.h5')
@@ -129,6 +139,7 @@ def main(args):
   train_loader_kwargs = {
     'question_h5': args.train_question_h5,
     'feature_h5': args.train_features_h5,
+    'image_h5': args.train_images_h5,
     'vocab': vocab,
     'batch_size': args.batch_size,
     'shuffle': args.shuffle_train_data == 1,
@@ -139,6 +150,7 @@ def main(args):
   val_loader_kwargs = {
     'question_h5': args.val_question_h5,
     'feature_h5': args.val_features_h5,
+    'image_h5': args.val_images_h5,
     'vocab': vocab,
     'batch_size': args.batch_size,
     'question_families': question_families,
@@ -179,7 +191,7 @@ def train_loop(args, train_loader, val_loader):
                                     lr=args.learning_rate)
     print('Here is the execution engine:')
     print(execution_engine)
-  if args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA']:
+  if args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA', 'RN']:
     baseline_model, baseline_kwargs = get_baseline_model(args)
     params = baseline_model.parameters()
     if args.baseline_train_only_rnn == 1:
@@ -207,9 +219,11 @@ def train_loop(args, train_loader, val_loader):
     print('Starting epoch %d' % epoch)
     for batch in train_loader:
       t += 1
-      questions, _, feats, answers, programs, _ = batch
+      questions, imgs, feats, answers, programs, _ = batch
       questions_var = Variable(questions.cuda())
-      feats_var = Variable(feats.cuda())
+      feats_var = None
+      if feats[0] is not None:
+        feats_var = Variable(feats.cuda())
       answers_var = Variable(answers.cuda())
       if programs[0] is not None:
         programs_var = Variable(programs.cuda())
@@ -228,9 +242,11 @@ def train_loop(args, train_loader, val_loader):
         loss = loss_fn(scores, answers_var)
         loss.backward()
         ee_optimizer.step()
-      elif args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA']:
+      elif args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA', 'RN']:
         baseline_optimizer.zero_grad()
         baseline_model.zero_grad()
+        if args.model_type == 'RN':
+          feats_var = Variable(imgs.cuda())
         scores = baseline_model(questions_var, feats_var)
         loss = loss_fn(scores, answers_var)
         loss.backward()
@@ -374,6 +390,7 @@ def get_execution_engine(args):
 def get_baseline_model(args):
   vocab = utils.load_vocab(args.vocab_json)
   if args.baseline_start_from is not None:
+    print('loading baseline from ', args.baseline_start_from)
     model, kwargs = utils.load_baseline(args.baseline_start_from)
   elif args.model_type == 'LSTM':
     kwargs = {
@@ -419,6 +436,11 @@ def get_baseline_model(args):
       'fc_dropout': args.classifier_dropout,
     }
     model = CnnLstmSaModel(**kwargs)
+  elif args.model_type == 'RN':
+    kwargs = {
+      'vocab': vocab,
+    }
+    model = RelationNetworkModel(**kwargs)
   if model.rnn.token_to_idx != vocab['question_token_to_idx']:
     # Make sure new vocab is superset of old
     for k, v in model.rnn.token_to_idx.items():
@@ -445,11 +467,13 @@ def check_accuracy(args, program_generator, execution_engine, baseline_model, lo
   set_mode('eval', [program_generator, execution_engine, baseline_model])
   num_correct, num_samples = 0, 0
   for batch in loader:
-    questions, _, feats, answers, programs, _ = batch
+    questions, imgs, feats, answers, programs, _ = batch
 
     questions_var = Variable(questions.cuda(), volatile=True)
-    feats_var = Variable(feats.cuda(), volatile=True)
-    answers_var = Variable(feats.cuda(), volatile=True)
+    feats_var = None
+    if feats[0] is not None:
+      feats_var = Variable(feats.cuda(), volatile=True)
+    answers_var = Variable(answers.cuda(), volatile=True)
     if programs[0] is not None:
       programs_var = Variable(programs.cuda(), volatile=True)
 
@@ -469,7 +493,9 @@ def check_accuracy(args, program_generator, execution_engine, baseline_model, lo
       programs_pred = program_generator.reinforce_sample(
                           questions_var, argmax=True)
       scores = execution_engine(feats_var, programs_pred)
-    elif args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA']:
+    elif args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA', 'RN']:
+      if args.model_type == 'RN':
+        feats_var = Variable(imgs.cuda())
       scores = baseline_model(questions_var, feats_var)
 
     if scores is not None:

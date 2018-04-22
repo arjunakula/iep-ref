@@ -10,6 +10,7 @@ import json
 import torch
 
 from iep.models import ModuleNet, Seq2Seq, LstmModel, CnnLstmModel, CnnLstmSaModel
+from iep.models.rn import RelationNetworkModel
 
 
 def invert_dict(d):
@@ -62,11 +63,14 @@ def load_baseline(path):
     'LSTM': LstmModel,
     'CNN+LSTM': CnnLstmModel,
     'CNN+LSTM+SA': CnnLstmSaModel,
+    'RN': RelationNetworkModel,
   }
   checkpoint = load_cpu(path)
   baseline_type = checkpoint['baseline_type']
   kwargs = checkpoint['baseline_kwargs']
   state = checkpoint['baseline_state']
+  for k, v in state.items():
+    print(k, v.size(), v.mean(), v.std())
 
   model = model_cls_dict[baseline_type](**kwargs)
   model.load_state_dict(state)

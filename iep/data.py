@@ -70,8 +70,10 @@ class ClevrDataset(Dataset):
       image = self.image_h5['images'][image_idx]
       image = torch.FloatTensor(np.asarray(image, dtype=np.float32))
 
-    feats = self.feature_h5['features'][image_idx]
-    feats = torch.FloatTensor(np.asarray(feats, dtype=np.float32))
+    feats = None
+    if self.feature_h5 is not None:
+      feats = self.feature_h5['features'][image_idx]
+      feats = torch.FloatTensor(np.asarray(feats, dtype=np.float32))
 
     program_json = None
     if program_seq is not None:
@@ -104,9 +106,11 @@ class ClevrDataLoader(DataLoader):
     if 'vocab' not in kwargs:
       raise ValueError('Must give vocab')
 
-    feature_h5_path = kwargs.pop('feature_h5')
-    print('Reading features from ', feature_h5_path)
-    self.feature_h5 = h5py.File(feature_h5_path, 'r')
+    self.feature_h5 = None
+    feature_h5_path = kwargs.pop('feature_h5', None)
+    if feature_h5_path is not None:
+      print('Reading features from ', feature_h5_path)
+      self.feature_h5 = h5py.File(feature_h5_path, 'r')
 
     self.image_h5 = None
     if 'image_h5' in kwargs:
