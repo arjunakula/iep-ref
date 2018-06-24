@@ -150,7 +150,7 @@ def list_to_str(program_list):
 
 def get_num_inputs(f):
   # This is a litle hacky; it would be better to look up from metadata.json
-  if type(f) is str:
+  if type(f) is str or type(f) is unicode:
     f = str_to_function(f)
   name = f['function']
   if name == 'scene':

@@ -94,14 +94,13 @@ python scripts/train_model.py \
 
 ### Step 2: Train the Execution Engine
 
-In this step we train the execution engine, using programs predicted from the program generator
-in the previous step:
+In this step we train the execution engine, using ground-truth programs:
 
 ```bash
 python scripts/train_model.py \
   --model_type EE \
-  --program_generator_start_from data/program_generator.py \
   --num_iterations 100000 \
+  --learning_rate 5e-5 \
   --checkpoint_path data/execution_engine.pt
 ```
 
@@ -114,6 +113,7 @@ python scripts/train_model.py \
   --model_type PG+EE \
   --program_generator_start_from data/program_generator.pt \
   --execution_engine_start_from data/execution_engine.pt \
+  --learning_rate 5e-5 \
   --checkpoint_path data/joint_pg_ee.pt
 ```
 
