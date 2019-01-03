@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import torchvision.models
+import numpy as np
 
 from iep.models.layers import ResidualBlock, GlobalAveragePool, Flatten
 import iep.programs
@@ -43,33 +44,46 @@ def build_stem(feature_dim, module_dim, num_layers=2, with_batchnorm=True):
   return nn.Sequential(*layers)
 
 
-def build_classifier(module_C, module_H, module_W, num_answers,
+def build_classifier(module_C, module_H, module_W, 
                      fc_dims=[], proj_dim=None, downsample='maxpool2',
                      with_batchnorm=True, dropout=0):
-  layers = []
-  prev_dim = module_C * module_H * module_W
-  if proj_dim is not None and proj_dim > 0:
-    layers.append(nn.Conv2d(module_C, proj_dim, kernel_size=1))
-    if with_batchnorm:
-      layers.append(nn.BatchNorm2d(proj_dim))
-    layers.append(nn.ReLU(inplace=True))
-    prev_dim = proj_dim * module_H * module_W
-  if downsample == 'maxpool2':
-    layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
-    prev_dim //= 4
-  elif downsample == 'maxpool4':
-    layers.append(nn.MaxPool2d(kernel_size=4, stride=4))
-    prev_dim //= 16
-  layers.append(Flatten())
-  for next_dim in fc_dims:
-    layers.append(nn.Linear(prev_dim, next_dim))
-    if with_batchnorm:
-      layers.append(nn.BatchNorm1d(next_dim))
-    layers.append(nn.ReLU(inplace=True))
-    if dropout > 0:
-      layers.append(nn.Dropout(p=dropout))
-    prev_dim = next_dim
-  layers.append(nn.Linear(prev_dim, num_answers))
+
+  res_block = ResidualBlock(module_C,
+              with_residual=True,
+              with_batchnorm=False)
+  layers = [res_block]
+
+  layers.append(nn.Conv2d(module_C, module_C, kernel_size=1))
+  if with_batchnorm:
+    layers.append(nn.BatchNorm2d(module_dim))
+  layers.append(nn.ReLU(inplace=True))
+
+  upsample = nn.Upsample(size=[320,320],mode='bilinear')
+
+  layers.append(upsample)
+  if with_batchnorm:
+    layers.append(nn.BatchNorm2d(module_dim))
+  layers.append(nn.ReLU(inplace=True))
+
+  layers.append(nn.Conv2d(module_C, module_C, kernel_size=1))
+  if with_batchnorm:
+    layers.append(nn.BatchNorm2d(module_dim))
+  layers.append(nn.ReLU(inplace=True))
+ 
+  layers.append(nn.Conv2d(module_C, module_C//4, kernel_size=1))
+  if with_batchnorm:
+    layers.append(nn.BatchNorm2d(module_dim))
+  layers.append(nn.ReLU(inplace=True))
+
+  layers.append(nn.Conv2d(module_C//4, 4, kernel_size=1))
+  if with_batchnorm:
+    layers.append(nn.BatchNorm2d(module_dim))
+  layers.append(nn.ReLU(inplace=True))
+
+  layers.append(nn.Conv2d(4, 2, kernel_size=1))
+  if with_batchnorm:
+    layers.append(nn.BatchNorm2d(module_dim))
+
   return nn.Sequential(*layers)
 
 
@@ -88,7 +102,6 @@ class ModuleNet(nn.Module):
                verbose=True):
     super(ModuleNet, self).__init__()
 
-
     self.stem = build_stem(feature_dim[0], module_dim,
                            num_layers=stem_num_layers,
                            with_batchnorm=stem_batchnorm)
@@ -96,14 +109,14 @@ class ModuleNet(nn.Module):
       print('Here is my stem:')
       print(self.stem)
 
-    num_answers = len(vocab['answer_idx_to_token'])
     module_H, module_W = feature_dim[1], feature_dim[2]
-    self.classifier = build_classifier(module_dim, module_H, module_W, num_answers,
+    self.classifier = build_classifier(module_dim, module_H, module_W, 
                                        classifier_fc_layers,
                                        classifier_proj_dim,
                                        classifier_downsample,
                                        with_batchnorm=classifier_batchnorm,
-                                       dropout=classifier_dropout)
+                                       dropout=classifier_dropout
+                                       )
     if verbose:
       print('Here is my classifier:')
       print(self.classifier)
@@ -115,7 +128,9 @@ class ModuleNet(nn.Module):
     self.function_modules = {}
     self.function_modules_num_inputs = {}
     self.vocab = vocab
+    print("vocab['program_token_to_idx']={}".format(vocab['program_token_to_idx']))
     for fn_str in vocab['program_token_to_idx']:
+      fn_str = str(fn_str)
       num_inputs = iep.programs.get_num_inputs(fn_str)
       self.function_modules_num_inputs[fn_str] = num_inputs
       if fn_str == 'scene' or num_inputs == 1:
@@ -130,6 +145,7 @@ class ModuleNet(nn.Module):
       self.function_modules[fn_str] = mod
 
     self.save_module_outputs = False
+
 
   def expand_answer_vocab(self, answer_to_idx, std=0.01, init_b=-50):
     # TODO: This is really gross, dipping into private internals of Sequential
@@ -147,6 +163,7 @@ class ModuleNet(nn.Module):
 
     final_linear.weight.data = new_weight
     final_linear.bias.data = new_bias
+
 
   def _forward_modules_json(self, feats, program):
     def gen_hook(i, j):
@@ -179,10 +196,12 @@ class ModuleNet(nn.Module):
     final_module_outputs = torch.cat(final_module_outputs, 0)
     return final_module_outputs
 
+
   def _forward_modules_ints_helper(self, feats, program, i, j):
     used_fn_j = True
     if j < program.size(1):
       fn_idx = program.data[i, j]
+      fn_idx = int(fn_idx.cpu().numpy())
       fn_str = self.vocab['program_idx_to_token'][fn_idx]
     else:
       used_fn_j = False
@@ -208,6 +227,7 @@ class ModuleNet(nn.Module):
     module_output = module(*module_inputs)
     return module_output, j
 
+
   def _forward_modules_ints(self, feats, program):
     """
     feats: FloatTensor of shape (N, C, H, W) giving features for each image
@@ -224,6 +244,7 @@ class ModuleNet(nn.Module):
     final_module_outputs = torch.cat(final_module_outputs, 0)
     return final_module_outputs
 
+
   def forward(self, x, program):
     N = x.size(0)
     assert N == len(program)
@@ -232,6 +253,8 @@ class ModuleNet(nn.Module):
 
     if type(program) is list or type(program) is tuple:
       final_module_outputs = self._forward_modules_json(feats, program)
+    elif type(program) is torch.Tensor and program.dim() == 2:
+      final_module_outputs = self._forward_modules_ints(feats, program)
     elif type(program) is Variable and program.dim() == 2:
       final_module_outputs = self._forward_modules_ints(feats, program)
     else:
@@ -239,5 +262,7 @@ class ModuleNet(nn.Module):
 
     # After running modules for each input, concatenat the outputs from the
     # final module and run the classifier.
+    batch_size = final_module_outputs.shape[0]
+    module_dim = final_module_outputs.shape[1]
     out = self.classifier(final_module_outputs)
     return out

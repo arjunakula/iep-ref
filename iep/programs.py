@@ -30,10 +30,15 @@ def is_chain(program_list):
 def list_to_tree(program_list):
   def build_subtree(cur):
     return {
-      'function': cur['function'],
+      'function': cur['type'],
       'value_inputs': [x for x in cur['value_inputs']],
       'inputs': [build_subtree(program_list[i]) for i in cur['inputs']],
     }
+#    return {
+#      'function': cur['function'],
+#      'value_inputs': [x for x in cur['value_inputs']],
+#      'inputs': [build_subtree(program_list[i]) for i in cur['inputs']],
+#    }
   return build_subtree(program_list[-1])
 
 
@@ -145,12 +150,13 @@ def str_to_function(s):
 
 
 def list_to_str(program_list):
-  return ' '.join(function_to_str(f) for f in program_list)
+  return ';'.join(function_to_str(f) for f in program_list)
 
 
 def get_num_inputs(f):
   # This is a litle hacky; it would be better to look up from metadata.json
-  if type(f) is str or type(f) is unicode:
+  #if type(f) is str or type(f) is unicode:
+  if type(f) is str:
     f = str_to_function(f)
   name = f['function']
   if name == 'scene':

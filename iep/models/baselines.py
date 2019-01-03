@@ -133,7 +133,7 @@ class LstmModel(nn.Module):
                fc_use_batchnorm=False, fc_dropout=0, fc_dims=(1024,)):
     super(LstmModel, self).__init__()
     rnn_kwargs = {
-      'token_to_idx': vocab['question_token_to_idx'],
+      'token_to_idx': vocab['refexp_token_to_idx'],
       'wordvec_dim': rnn_wordvec_dim,
       'rnn_dim': rnn_dim,
       'rnn_num_layers': rnn_num_layers,
@@ -150,8 +150,8 @@ class LstmModel(nn.Module):
     }
     self.classifier = build_mlp(**classifier_kwargs)
 
-  def forward(self, questions, feats):
-    q_feats = self.rnn(questions)
+  def forward(self, refexps, feats):
+    q_feats = self.rnn(refexps)
     scores = self.classifier(q_feats)
     return scores
 
@@ -165,7 +165,7 @@ class CnnLstmModel(nn.Module):
                fc_dims=(1024,), fc_use_batchnorm=False, fc_dropout=0):
     super(CnnLstmModel, self).__init__()
     rnn_kwargs = {
-      'token_to_idx': vocab['question_token_to_idx'],
+      'token_to_idx': vocab['refexp_token_to_idx'],
       'wordvec_dim': rnn_wordvec_dim,
       'rnn_dim': rnn_dim,
       'rnn_num_layers': rnn_num_layers,
@@ -191,10 +191,10 @@ class CnnLstmModel(nn.Module):
     }
     self.classifier = build_mlp(**classifier_kwargs)
 
-  def forward(self, questions, feats):
-    N = questions.size(0)
+  def forward(self, refexps, feats):
+    N = refexps.size(0)
     assert N == feats.size(0)
-    q_feats = self.rnn(questions)
+    q_feats = self.rnn(refexps)
     img_feats = self.cnn(feats)
     cat_feats = torch.cat([q_feats, img_feats.view(N, -1)], 1)
     scores = self.classifier(cat_feats)
@@ -209,7 +209,7 @@ class CnnLstmSaModel(nn.Module):
                fc_use_batchnorm=False, fc_dropout=0, fc_dims=(1024,)):
     super(CnnLstmSaModel, self).__init__()
     rnn_kwargs = {
-      'token_to_idx': vocab['question_token_to_idx'],
+      'token_to_idx': vocab['refexp_token_to_idx'],
       'wordvec_dim': rnn_wordvec_dim,
       'rnn_dim': rnn_dim,
       'rnn_num_layers': rnn_num_layers,
@@ -234,8 +234,8 @@ class CnnLstmSaModel(nn.Module):
     }
     self.classifier = build_mlp(**classifier_args)
 
-  def forward(self, questions, feats):
-    u = self.rnn(questions)
+  def forward(self, refexps, feats):
+    u = self.rnn(refexps)
     v = self.image_proj(feats)
 
     for sa in self.stacked_attns:

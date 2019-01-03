@@ -182,7 +182,9 @@ class Seq2Seq(nn.Module):
       self.multinomial_probs.append(probs)
       cur_output_data = cur_output.data.cpu()
       not_done = logical_not(done)
-      y[:, t][not_done] = cur_output_data[not_done]
+      #print('cur_output_data[not_done].shape={}'.format(cur_output_data[not_done].shape))
+      #print('y[:, t][not_done].shape={}'.format(y[:, t][not_done].shape))
+      y[:, t][not_done] = cur_output_data[not_done].view(-1)
       done = logical_or(done, cur_output_data.cpu()[:, 0] == self.END)
       cur_input = cur_output
       if done.sum() == N:

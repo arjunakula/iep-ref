@@ -10,13 +10,13 @@ Utilities for dealing with embeddings.
 
 
 def convert_pretrained_wordvecs(vocab, word2vec):
-  N = len(vocab['question_idx_to_token'])
+  N = len(vocab['refexp_idx_to_token'])
   D = word2vec['vecs'].size(1)
   embed = torch.nn.Embedding(N, D)
   print(type(embed.weight))
   word2vec_word_to_idx = {w: i for i, w in enumerate(word2vec['words'])}
   print(type(word2vec['vecs']))
-  for idx, word in vocab['question_idx_to_token'].items():
+  for idx, word in vocab['refexp_idx_to_token'].items():
     word2vec_idx = word2vec_word_to_idx.get(word, None)
     if word2vec_idx is not None:
       embed.weight.data[idx] = word2vec['vecs'][word2vec_idx]

@@ -6,7 +6,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import sys
+import sys,time
 import os
 
 import argparse
@@ -23,16 +23,18 @@ import h5py
 
 import iep.utils as utils
 import iep.preprocess
-from iep.data import ClevrDataset, ClevrDataLoader
+from iep.data import ClevrDataset, ClevrDataLoader, clevr_collate
 from iep.models import ModuleNet, Seq2Seq, LstmModel, CnnLstmModel, CnnLstmSaModel
+import copy
 
 
 parser = argparse.ArgumentParser()
 
 # Input data
-parser.add_argument('--train_question_h5', default='data/train_questions.h5')
+
+parser.add_argument('--train_refexp_h5', default='data/train_refexps.h5')
 parser.add_argument('--train_features_h5', default='data/train_features.h5')
-parser.add_argument('--val_question_h5', default='data/val_questions.h5')
+parser.add_argument('--val_refexp_h5', default='data/val_refexps.h5')
 parser.add_argument('--val_features_h5', default='data/val_features.h5')
 parser.add_argument('--feature_dim', default='1024,14,14')
 parser.add_argument('--vocab_json', default='data/vocab.json')
@@ -112,52 +114,126 @@ def main(args):
   vocab = utils.load_vocab(args.vocab_json)
 
   if args.use_local_copies == 1:
-    shutil.copy(args.train_question_h5, '/tmp/train_questions.h5')
+    shutil.copy(args.train_refexp_h5, '/tmp/train_refexps.h5')
     shutil.copy(args.train_features_h5, '/tmp/train_features.h5')
-    shutil.copy(args.val_question_h5, '/tmp/val_questions.h5')
+    shutil.copy(args.val_refexp_h5, '/tmp/val_refexps.h5')
     shutil.copy(args.val_features_h5, '/tmp/val_features.h5')
-    args.train_question_h5 = '/tmp/train_questions.h5'
+    args.train_refexp_h5 = '/tmp/train_refexps.h5'
     args.train_features_h5 = '/tmp/train_features.h5'
-    args.val_question_h5 = '/tmp/val_questions.h5'
+    args.val_refexp_h5 = '/tmp/val_refexps.h5'
     args.val_features_h5 = '/tmp/val_features.h5'
 
-  question_families = None
+  refexp_families = None
   if args.family_split_file is not None:
     with open(args.family_split_file, 'r') as f:
-      question_families = json.load(f)
+      refexp_families = json.load(f)
 
   train_loader_kwargs = {
-    'question_h5': args.train_question_h5,
+    'refexp_h5': args.train_refexp_h5,
     'feature_h5': args.train_features_h5,
     'vocab': vocab,
     'batch_size': args.batch_size,
     'shuffle': args.shuffle_train_data == 1,
-    'question_families': question_families,
+    'refexp_families': refexp_families,
     'max_samples': args.num_train_samples,
     'num_workers': args.loader_num_workers,
   }
   val_loader_kwargs = {
-    'question_h5': args.val_question_h5,
+    'refexp_h5': args.val_refexp_h5,
     'feature_h5': args.val_features_h5,
     'vocab': vocab,
     'batch_size': args.batch_size,
-    'question_families': question_families,
+    'refexp_families': refexp_families,
     'max_samples': args.num_val_samples,
     'num_workers': args.loader_num_workers,
   }
 
-  with ClevrDataLoader(**train_loader_kwargs) as train_loader, \
-       ClevrDataLoader(**val_loader_kwargs) as val_loader:
-    train_loop(args, train_loader, val_loader)
+  class TLoader:  
+    def __init__(self, kwargs, batch_size):
+      import copy
+      self.kwargs = copy.deepcopy(kwargs)
+      self.batch_size = batch_size 
+      #self.reset()
+
+    def reset(self):
+      import copy
+      self.loader = self.get_loader(copy.deepcopy(self.kwargs), self.batch_size)
+
+    def __iter__(self):
+      return self.loader
+
+    def __next__(self):
+      #yield self.loader
+      assert 1==0
+      pass
+    
+    def get_dataset(self, kwargs):
+      if 'refexp_h5' not in kwargs:
+        raise ValueError('Must give refexp_h5')
+      if 'feature_h5' not in kwargs:
+        raise ValueError('Must give feature_h5')
+      if 'vocab' not in kwargs:
+        raise ValueError('Must give vocab')
+
+      feature_h5_path = kwargs.pop('feature_h5')
+      print('Reading features from ', feature_h5_path)
+      _feature_h5 = h5py.File(feature_h5_path, 'r')
+
+      _image_h5 = None
+      if 'image_h5' in kwargs:
+        image_h5_path = kwargs.pop('image_h5')
+        print('Reading images from ', image_h5_path)
+        _image_h5 = h5py.File(image_h5_path, 'r')
+
+      vocab = kwargs.pop('vocab')
+      mode = kwargs.pop('mode', 'prefix')
+
+      refexp_families = kwargs.pop('refexp_families', None)
+      max_samples = kwargs.pop('max_samples', None)
+      refexp_h5_path = kwargs.pop('refexp_h5')
+      image_idx_start_from = kwargs.pop('image_idx_start_from', None)
+      print('Reading refexps from ', refexp_h5_path)
+      _dataset = ClevrDataset(refexp_h5_path, _feature_h5, vocab, mode,
+                              image_h5=_image_h5,
+                              max_samples=max_samples,
+                              refexp_families=refexp_families,
+                              image_idx_start_from=image_idx_start_from)
+      return _dataset 
+
+
+    def get_loader(self, _loader_kwargs, batch_size):
+      _batch_lis = []
+      import copy
+      _tic_time = time.time()
+      cur_dataset = self.get_dataset(copy.deepcopy(_loader_kwargs))
+      len_dataset = len(cur_dataset)
+      for i, item in enumerate(cur_dataset):
+        _batch_lis.append(item)
+        if i>= len_dataset:
+          yield clevr_collate(_batch_lis)
+          raise StopIteration
+          break
+        if len(_batch_lis) == batch_size:
+          _toc_time = time.time()
+          yield clevr_collate(_batch_lis)
+          _batch_lis.clear()
+          _tic_time = time.time()
+
+  train_loader = TLoader(train_loader_kwargs, args.batch_size)
+  train_len    = len(train_loader.get_dataset(train_loader_kwargs))
+  val_loader = TLoader(val_loader_kwargs, args.batch_size)
+  val_len      = len(val_loader.get_dataset(val_loader_kwargs))
+
+  train_loop(args, train_loader, train_len, val_loader, val_len)
 
   if args.use_local_copies == 1 and args.cleanup_local_copies == 1:
-    os.remove('/tmp/train_questions.h5')
+    os.remove('/tmp/train_refexps.h5')
     os.remove('/tmp/train_features.h5')
-    os.remove('/tmp/val_questions.h5')
+    os.remove('/tmp/val_refexps.h5')
     os.remove('/tmp/val_features.h5')
 
 
-def train_loop(args, train_loader, val_loader):
+def train_loop(args, train_loader, train_len, val_loader, val_len):
   vocab = utils.load_vocab(args.vocab_json)
   program_generator, pg_kwargs, pg_optimizer = None, None, None
   execution_engine, ee_kwargs, ee_optimizer = None, None, None
@@ -189,6 +265,7 @@ def train_loop(args, train_loader, val_loader):
     print(baseline_model)
     baseline_type = args.model_type
   loss_fn = torch.nn.CrossEntropyLoss().cuda()
+  L1loss_fn = torch.nn.L1Loss().cuda()
 
   stats = {
     'train_losses': [], 'train_rewards': [], 'train_losses_ts': [],
@@ -199,49 +276,163 @@ def train_loop(args, train_loader, val_loader):
 
   set_mode('train', [program_generator, execution_engine, baseline_model])
 
-  print('train_loader has %d samples' % len(train_loader.dataset))
-  print('val_loader has %d samples' % len(val_loader.dataset))
+  print('train_loader has %d samples' % train_len)
+  print('val_loader has %d samples' % val_len)
 
+  tic_time = time.time()
+  toc_time = time.time()
   while t < args.num_iterations:
     epoch += 1
     print('Starting epoch %d' % epoch)
+    train_loader.reset()
+    val_loader.reset()
+
+    cum_I=0 ; cum_U=0
+
+
     for batch in train_loader:
       t += 1
-      questions, _, feats, answers, programs, _ = batch
-      questions_var = Variable(questions.cuda())
+      refexps, _, feats, answers, programs, __, image_id = batch
+
+      refexps_var = Variable(refexps.cuda())
       feats_var = Variable(feats.cuda())
       answers_var = Variable(answers.cuda())
+      if len(answers_var.shape) == 3:
+        answers_var = answers_var.view(answers_var.shape[0], 1, answers_var.shape[1], answers_var.shape[2])
       if programs[0] is not None:
         programs_var = Variable(programs.cuda())
 
       reward = None
+      
+
       if args.model_type == 'PG':
         # Train program generator with ground-truth programs
         pg_optimizer.zero_grad()
-        loss = program_generator(questions_var, programs_var)
+        loss = program_generator(refexps_var, programs_var)
         loss.backward()
         pg_optimizer.step()
       elif args.model_type == 'EE':
         # Train execution engine with ground-truth programs
         ee_optimizer.zero_grad()
         scores = execution_engine(feats_var, programs_var)
-        loss = loss_fn(scores, answers_var)
+        preds = scores.clone()
+
+        scores = scores.transpose(1,2).transpose(2,3).contiguous()
+        scores = scores.view([-1,2]).cuda()
+        _ans = answers_var.view([-1]).cuda()
+        loss = loss_fn(scores, _ans)
         loss.backward()
         ee_optimizer.step()
+
+        def compute_mask_IU(masks, target):
+          assert(target.shape[-2:] == masks.shape[-2:])
+          masks = masks.data.cpu().numpy()
+          masks = masks[:, 1, :, :] > masks[:, 0, :, :]
+          masks = masks.reshape([args.batch_size, 320, 320])
+          target = target.data.cpu().numpy()
+          print('np.sum(masks)={}'.format(np.sum(masks)))
+          print('np.sum(target)={}'.format(np.sum(target)))
+          I = np.sum(np.logical_and(masks, target))
+          U = np.sum(np.logical_or(masks, target))
+          return I, U
+
+        I, U = compute_mask_IU(preds, answers)
+        now_iou = I*1.0/U
+        cum_I += I; cum_U += U
+        cum_iou = cum_I*1.0/cum_U
+
+        print_each = 10
+        if t % print_each == 0:
+          msg = 'now IoU = %f' % (now_iou)
+          print(msg)
+          msg = 'cumulative IoU = %f' % (cum_iou)
+          print(msg)
+        if t % print_each == 0:
+          cur_time = time.time()
+          since_last_print =  cur_time - toc_time
+          toc_time = cur_time
+          ellapsedtime = toc_time - tic_time
+          iter_avr = since_last_print / (print_each+1e-5)
+          batch_size = args.batch_size
+          case_per_sec = print_each * 1 * batch_size / (since_last_print + 1e-6)
+          estimatedleft = (args.num_iterations - t) * 1.0 * iter_avr
+          print('ellapsedtime = %d, iter_avr = %f, case_per_sec = %f, estimatedleft = %f'
+                % (ellapsedtime, iter_avr, case_per_sec, estimatedleft))
+
       elif args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA']:
         baseline_optimizer.zero_grad()
         baseline_model.zero_grad()
-        scores = baseline_model(questions_var, feats_var)
+        scores = baseline_model(refexps_var, feats_var)
         loss = loss_fn(scores, answers_var)
         loss.backward()
         baseline_optimizer.step()
       elif args.model_type == 'PG+EE':
-        programs_pred = program_generator.reinforce_sample(questions_var)
+        programs_pred = program_generator.reinforce_sample(refexps_var)
+        programs_pred = programs_pred.data.cpu().numpy()
+        programs_pred = torch.LongTensor(programs_pred).cuda()
+
         scores = execution_engine(feats_var, programs_pred)
 
-        loss = loss_fn(scores, answers_var)
-        _, preds = scores.data.cpu().max(1)
-        raw_reward = (preds == answers).float()
+        preds = scores.clone()
+
+        scores = scores.transpose(1,2).transpose(2,3).contiguous()
+        scores = scores.view([-1,2]).cuda()
+        _ans = answers_var.view([-1]).cuda()
+        loss = loss_fn(scores, _ans)
+
+        def compute_mask_IU(masks, target):
+          assert(target.shape[-2:] == masks.shape[-2:])
+          masks = masks.data.cpu().numpy()
+          masks = masks[:, 1, :, :] > masks[:, 0, :, :]
+          masks = masks.reshape([args.batch_size, 320, 320])
+          target = target.data.cpu().numpy()
+          print('np.sum(masks)={}'.format(np.sum(masks)))
+          print('np.sum(target)={}'.format(np.sum(target)))
+          I = np.sum(np.logical_and(masks, target))
+          U = np.sum(np.logical_or(masks, target))
+          return I, U
+
+        I, U = compute_mask_IU(preds, answers)
+        now_iou = I*1.0/U
+        cum_I += I; cum_U += U
+        cum_iou = cum_I*1.0/cum_U
+
+        print_each = 10
+        if t % print_each == 0:
+          msg = 'now IoU = %f' % (now_iou); print(msg)
+          msg = 'cumulative IoU = %f' % (cum_iou); print(msg)
+        if t % print_each == 0:
+          cur_time = time.time()
+          since_last_print =  cur_time - toc_time
+          toc_time = cur_time
+          ellapsedtime = toc_time - tic_time
+          iter_avr = since_last_print / (print_each+1e-5)
+          batch_size = args.batch_size
+          case_per_sec = print_each * 1 * batch_size / (since_last_print + 1e-6)
+          estimatedleft = (args.num_iterations - t) * 1.0 * iter_avr
+          print('ellapsedtime = %d, iter_avr = %f, case_per_sec = %f, estimatedleft = %f'
+                % (ellapsedtime, iter_avr, case_per_sec, estimatedleft))
+
+        def easy_compute_mask_IU(masks, target):
+          assert(target.shape[-2:] == masks.shape[-2:])
+          masks = masks.data.cpu().numpy()
+          masks = masks[1, :, :] > masks[0, :, :]
+          masks = masks.reshape([320, 320])
+          target = target.data.cpu().numpy()
+          assert(target.shape == masks.shape)
+          I = np.sum(np.logical_and(masks, target))
+          U = np.sum(np.logical_or(masks, target))
+          return I, U
+
+        now_ious = []
+        for _pred, _answer in zip(preds, answers):
+          _I, _U = easy_compute_mask_IU(_pred, _answer)
+          if _U > 0:
+            now_ious.append(_I*1.0/_U)
+          else:
+            now_ious.append(0.0)
+
+        raw_reward = torch.FloatTensor(now_ious)
         reward_moving_average *= args.reward_decay
         reward_moving_average += (1.0 - args.reward_decay) * raw_reward.mean()
         centered_reward = raw_reward - reward_moving_average
@@ -265,18 +456,28 @@ def train_loop(args, train_loader, val_loader):
 
       if t % args.checkpoint_every == 0:
         print('Checking training accuracy ... ')
-        train_acc = check_accuracy(args, program_generator, execution_engine,
-                                   baseline_model, train_loader)
+        if args.model_type == 'PG':
+          train_acc = check_accuracy(args, program_generator, execution_engine,
+                                     baseline_model, train_loader)
+        else:
+          train_acc = 0.0
+
         print('train accuracy is', train_acc)
         print('Checking validation accuracy ...')
-        val_acc = check_accuracy(args, program_generator, execution_engine,
+        if args.model_type == 'PG':
+          val_acc = check_accuracy(args, program_generator, execution_engine,
                                  baseline_model, val_loader)
+        else:
+          val_acc = 0.0
+
         print('val accuracy is ', val_acc)
+
         stats['train_accs'].append(train_acc)
         stats['val_accs'].append(val_acc)
         stats['val_accs_ts'].append(t)
 
-        if val_acc > stats['best_val_acc']:
+        #Alwayse save models
+        if True:
           stats['best_val_acc'] = val_acc
           stats['model_t'] = t
           best_pg_state = get_state(program_generator)
@@ -296,13 +497,11 @@ def train_loop(args, train_loader, val_loader):
         }
         for k, v in stats.items():
           checkpoint[k] = v
-        print('Saving checkpoint to %s' % args.checkpoint_path)
-        torch.save(checkpoint, args.checkpoint_path)
+        print('Saving checkpoint to %s' % args.checkpoint_path + '_' + str(t))
+        torch.save(checkpoint, args.checkpoint_path + '_' + str(t))
         del checkpoint['program_generator_state']
         del checkpoint['execution_engine_state']
         del checkpoint['baseline_state']
-        with open(args.checkpoint_path + '.json', 'w') as f:
-          json.dump(checkpoint, f)
 
       if t == args.num_iterations:
         break
@@ -326,13 +525,13 @@ def get_program_generator(args):
   if args.program_generator_start_from is not None:
     pg, kwargs = utils.load_program_generator(args.program_generator_start_from)
     cur_vocab_size = pg.encoder_embed.weight.size(0)
-    if cur_vocab_size != len(vocab['question_token_to_idx']):
+    if cur_vocab_size != len(vocab['refexp_token_to_idx']):
       print('Expanding vocabulary of program generator')
-      pg.expand_encoder_vocab(vocab['question_token_to_idx'])
-      kwargs['encoder_vocab_size'] = len(vocab['question_token_to_idx'])
+      pg.expand_encoder_vocab(vocab['refexp_token_to_idx'])
+      kwargs['encoder_vocab_size'] = len(vocab['refexp_token_to_idx'])
   else:
     kwargs = {
-      'encoder_vocab_size': len(vocab['question_token_to_idx']),
+      'encoder_vocab_size': len(vocab['refexp_token_to_idx']),
       'decoder_vocab_size': len(vocab['program_token_to_idx']),
       'wordvec_dim': args.rnn_wordvec_dim,
       'hidden_dim': args.rnn_hidden_dim,
@@ -348,6 +547,7 @@ def get_program_generator(args):
 def get_execution_engine(args):
   vocab = utils.load_vocab(args.vocab_json)
   if args.execution_engine_start_from is not None:
+    print('[restart] from', args.execution_engine_start_from)
     ee, kwargs = utils.load_execution_engine(args.execution_engine_start_from)
     # TODO: Adjust vocab?
   else:
@@ -419,15 +619,15 @@ def get_baseline_model(args):
       'fc_dropout': args.classifier_dropout,
     }
     model = CnnLstmSaModel(**kwargs)
-  if model.rnn.token_to_idx != vocab['question_token_to_idx']:
+  if model.rnn.token_to_idx != vocab['refexp_token_to_idx']:
     # Make sure new vocab is superset of old
     for k, v in model.rnn.token_to_idx.items():
-      assert k in vocab['question_token_to_idx']
-      assert vocab['question_token_to_idx'][k] == v
-    for token, idx in vocab['question_token_to_idx'].items():
+      assert k in vocab['refexp_token_to_idx']
+      assert vocab['refexp_token_to_idx'][k] == v
+    for token, idx in vocab['refexp_token_to_idx'].items():
       model.rnn.token_to_idx[token] = idx
     kwargs['vocab'] = vocab
-    model.rnn.expand_vocab(vocab['question_token_to_idx'])
+    model.rnn.expand_vocab(vocab['refexp_token_to_idx'])
   model.cuda()
   model.train()
   return model, kwargs
@@ -445,9 +645,11 @@ def check_accuracy(args, program_generator, execution_engine, baseline_model, lo
   set_mode('eval', [program_generator, execution_engine, baseline_model])
   num_correct, num_samples = 0, 0
   for batch in loader:
-    questions, _, feats, answers, programs, _ = batch
+    if num_samples % 30 == 0:
+      print('process', num_samples, end='\r')
+    refexps, _, feats, answers, programs, _, _ = batch
 
-    questions_var = Variable(questions.cuda(), volatile=True)
+    refexps_var = Variable(refexps.cuda(), volatile=True)
     feats_var = Variable(feats.cuda(), volatile=True)
     answers_var = Variable(feats.cuda(), volatile=True)
     if programs[0] is not None:
@@ -456,8 +658,8 @@ def check_accuracy(args, program_generator, execution_engine, baseline_model, lo
     scores = None # Use this for everything but PG
     if args.model_type == 'PG':
       vocab = utils.load_vocab(args.vocab_json)
-      for i in range(questions.size(0)):
-        program_pred = program_generator.sample(Variable(questions[i:i+1].cuda(), volatile=True))
+      for i in range(refexps.size(0)):
+        program_pred = program_generator.sample(Variable(refexps[i:i+1].cuda(), volatile=True))
         program_pred_str = iep.preprocess.decode(program_pred, vocab['program_idx_to_token'])
         program_str = iep.preprocess.decode(programs[i], vocab['program_idx_to_token'])
         if program_pred_str == program_str:
@@ -465,12 +667,13 @@ def check_accuracy(args, program_generator, execution_engine, baseline_model, lo
         num_samples += 1
     elif args.model_type == 'EE':
         scores = execution_engine(feats_var, programs_var)
+        scores = None
     elif args.model_type == 'PG+EE':
       programs_pred = program_generator.reinforce_sample(
-                          questions_var, argmax=True)
+                          refexps_var, argmax=True)
       scores = execution_engine(feats_var, programs_pred)
     elif args.model_type in ['LSTM', 'CNN+LSTM', 'CNN+LSTM+SA']:
-      scores = baseline_model(questions_var, feats_var)
+      scores = baseline_model(refexps_var, feats_var)
 
     if scores is not None:
       _, preds = scores.data.cpu().max(1)
@@ -481,7 +684,7 @@ def check_accuracy(args, program_generator, execution_engine, baseline_model, lo
       break
 
   set_mode('train', [program_generator, execution_engine, baseline_model])
-  acc = float(num_correct) / num_samples
+  acc = float(num_correct) / (num_samples+0.000001)
   return acc
 
 

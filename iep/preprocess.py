@@ -60,7 +60,12 @@ def build_vocab(sequences, min_token_count=1, delim=' ',
     'add_end_token': False,
   }
   for seq in sequences:
+#    if delim==';':
+#      print('seq={}'.format(seq))
     seq_tokens = tokenize(seq, **tokenize_kwargs)
+#    if delim==';':
+#      print('seq_tokens={}'.format(seq_tokens))
+#      _=input()
     for token in seq_tokens:
       if token not in token_to_count:
         token_to_count[token] = 0
@@ -91,6 +96,8 @@ def encode(seq_tokens, token_to_idx, allow_unk=False):
 def decode(seq_idx, idx_to_token, delim=None, stop_at_end=True):
   tokens = []
   for idx in seq_idx:
+    if type(idx) != int:
+      idx = int(idx.data.cpu().numpy())
     tokens.append(idx_to_token[idx])
     if stop_at_end and tokens[-1] == '<END>':
       break

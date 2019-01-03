@@ -19,13 +19,16 @@ def invert_dict(d):
 def load_vocab(path):
   with open(path, 'r') as f:
     vocab = json.load(f)
-    vocab['question_idx_to_token'] = invert_dict(vocab['question_token_to_idx'])
+    vocab['refexp_idx_to_token'] = invert_dict(vocab['refexp_token_to_idx'])
     vocab['program_idx_to_token'] = invert_dict(vocab['program_token_to_idx'])
-    vocab['answer_idx_to_token'] = invert_dict(vocab['answer_token_to_idx'])
+    if vocab['answer_token_to_idx'] is not None:
+      vocab['answer_idx_to_token'] = invert_dict(vocab['answer_token_to_idx'])
+    else:
+      vocab['answer_idx_to_token'] = None
   # Sanity check: make sure <NULL>, <START>, and <END> are consistent
-  assert vocab['question_token_to_idx']['<NULL>'] == 0
-  assert vocab['question_token_to_idx']['<START>'] == 1
-  assert vocab['question_token_to_idx']['<END>'] == 2
+  assert vocab['refexp_token_to_idx']['<NULL>'] == 0
+  assert vocab['refexp_token_to_idx']['<START>'] == 1
+  assert vocab['refexp_token_to_idx']['<END>'] == 2
   assert vocab['program_token_to_idx']['<NULL>'] == 0
   assert vocab['program_token_to_idx']['<START>'] == 1
   assert vocab['program_token_to_idx']['<END>'] == 2
@@ -47,7 +50,7 @@ def load_program_generator(path):
   return model, kwargs
 
 
-def load_execution_engine(path, verbose=True):
+def load_execution_engine(path,verbose=True):
   checkpoint = load_cpu(path)
   kwargs = checkpoint['execution_engine_kwargs']
   state = checkpoint['execution_engine_state']
