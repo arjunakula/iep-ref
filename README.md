@@ -1,6 +1,17 @@
 # IEP-Ref
 
-This is the code for the IEP-Ref model, a module network approach for referring expression problems.
+This is the code for the IEP-Ref model, a module network approach for referring expression problems. See our [paper](https://arxiv.org/abs/1901.00850):
+```bash
+@article{liu2019clevr,
+  author    = {Runtao Liu and
+               Chenxi Liu and
+               Yutong Bai and
+               Alan Yuille},
+  title     = {CLEVR-Ref+: Diagnosing Visual Reasoning with Referring Expressions},
+  journal   = {arXiv preprint arXiv:1901.00850},
+  year      = {2019}
+}
+```
 
 ## Setup
 
